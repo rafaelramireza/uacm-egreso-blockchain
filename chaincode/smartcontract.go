@@ -205,3 +205,69 @@ func (s *SmartContract) QueryExpedientes(ctx contractapi.TransactionContextInter
 
 	return expedientes, nil
 }
+
+// CertificarEstudio valida que el alumno cumplió con los créditos académicos.
+// Solo permitido para Registro Escolar (Org1).
+func (s *SmartContract) CertificarEstudio(ctx contractapi.TransactionContextInterface, matricula string, hashCertificado string) error {
+	// 1. Validar Identidad (Seguridad)
+	mspid, _ := ctx.GetClientIdentity().GetMSPID()
+	if mspid != "Org1MSP" {
+		return fmt.Errorf("autorización denegada: la organización %s no tiene permiso para certificar estudios", mspid)
+	}
+
+	// 2. Obtener el expediente actual
+	expediente, err := s.ConsultarExpediente(ctx, matricula)
+	if err != nil {
+		return err
+	}
+
+	// 3. Validar Máquina de Estados (Pre-condición)
+	if expediente.EstadoActual != "SERVICIO_SOCIAL_LIBERADO" {
+		return fmt.Errorf("error de flujo: el alumno %s debe liberar servicio social antes de certificar estudios", matricula)
+	}
+
+	// 4. Actualizar Estado y Evidencias
+	expediente.EstadoActual = "ESTUDIOS_CERTIFICADOS"
+	expediente.Evidencias["ESTUDIOS_CERTIFICADOS"] = Evidencia{
+		Hash:      hashCertificado,
+		Timestamp: time.Now().Format(time.RFC3339),
+		Emisor:    "Certificaciones - Org1",
+	}
+
+	// 5. Guardar en el Ledger
+	expedienteJSON, _ := json.Marshal(expediente)
+	return ctx.GetStub().PutState(matricula, expedienteJSON)
+}
+
+// TitularAlumno registra el acta de examen profesional y cierra el ciclo de egreso.
+// Solo permitido para Coordinación de Titulación (Org2).
+func (s *SmartContract) TitularAlumno(ctx contractapi.TransactionContextInterface, matricula string, hashActa string) error {
+	// 1. Validar Identidad (Seguridad)
+	mspid, _ := ctx.GetClientIdentity().GetMSPID()
+	if mspid != "Org2MSP" {
+		return fmt.Errorf("autorización denegada: la organización %s no tiene permiso para emitir títulos", mspid)
+	}
+
+	// 2. Obtener el expediente actual
+	expediente, err := s.ConsultarExpediente(ctx, matricula)
+	if err != nil {
+		return err
+	}
+
+	// 3. Validar Máquina de Estados (Pre-condición)
+	if expediente.EstadoActual != "ESTUDIOS_CERTIFICADOS" {
+		return fmt.Errorf("error de flujo: el alumno %s no cuenta con estudios certificados para proceder a titulación", matricula)
+	}
+
+	// 4. Actualizar Estado Final
+	expediente.EstadoActual = "TITULADO"
+	expediente.Evidencias["TITULADO"] = Evidencia{
+		Hash:      hashActa,
+		Timestamp: time.Now().Format(time.RFC3339),
+		Emisor:    "Titulaciones - Org2",
+	}
+
+	// 5. Guardar en el Ledger
+	expedienteJSON, _ := json.Marshal(expediente)
+	return ctx.GetStub().PutState(matricula, expedienteJSON)
+}
