@@ -228,7 +228,7 @@ func (s *SmartContract) CertificarEstudio(ctx contractapi.TransactionContextInte
 
 	// 4. Actualizar Estado y Evidencias
 	expediente.EstadoActual = "ESTUDIOS_CERTIFICADOS"
-	expediente.Evidencias["ESTUDIOS_CERTIFICADOS"] = Evidencia{
+	expediente.Evidencias["ESTUDIOS_CERTIFICADOS"] = HashEvidencia{
 		Hash:      hashCertificado,
 		Timestamp: time.Now().Format(time.RFC3339),
 		Emisor:    "Certificaciones - Org1",
@@ -261,7 +261,7 @@ func (s *SmartContract) TitularAlumno(ctx contractapi.TransactionContextInterfac
 
 	// 4. Actualizar Estado Final
 	expediente.EstadoActual = "TITULADO"
-	expediente.Evidencias["TITULADO"] = Evidencia{
+	expediente.Evidencias["TITULADO"] = HashEvidencia{
 		Hash:      hashActa,
 		Timestamp: time.Now().Format(time.RFC3339),
 		Emisor:    "Titulaciones - Org2",
