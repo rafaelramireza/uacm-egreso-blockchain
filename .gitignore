@@ -1,0 +1,12 @@
+﻿# Binarios
+uacm-check
+uacm-egreso
+
+# Carpetas de paquetes (Opcional, pero recomendado para mantener el repo limpio)
+# Si quieres que el código sea "autocontenido" en GitHub, no ignores vendor.
+# Pero lo estándar es ignorarlo:
+vendor/
+
+# Variables de entorno y temporales
+.env
+*.log
