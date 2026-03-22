@@ -1,6 +1,7 @@
 ﻿# Binarios
 uacm-check
 uacm-egreso
+node_modules
 
 # Carpetas de paquetes (Opcional, pero recomendado para mantener el repo limpio)
 # Si quieres que el código sea "autocontenido" en GitHub, no ignores vendor.
