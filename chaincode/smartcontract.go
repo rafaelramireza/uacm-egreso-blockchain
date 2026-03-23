@@ -9,7 +9,6 @@ import (
 	"github.com/hyperledger/fabric-contract-api-go/contractapi"
 )
 
-// Estados válidos según Sección 4.3 del SRS
 const (
 	EstadoInscrito    = "INSCRITO"
 	EstadoDocValidado = "DOC_VALIDADO"
@@ -19,7 +18,6 @@ const (
 	EstadoTitulado    = "TITULADO"
 )
 
-// EventoHistorial: Estructura para auditoría (Sección 4.2)
 type EventoHistorial struct {
 	Estado        string `json:"estado"`
 	Org           string `json:"org"`
@@ -28,162 +26,112 @@ type EventoHistorial struct {
 	Accion        string `json:"accion"`
 }
 
-// Expediente: Estructura principal sin PII (RNF-8 y Sección 4.1)
 type Expediente struct {
 	DocType      string            `json:"docType"`
 	Matricula    string            `json:"matricula"`
 	EstadoActual string            `json:"estadoActual"`
-	Historial    []EventoHistorial `json:"historial"` // Slice ordenado para trazabilidad secuencial
+	Historial    []EventoHistorial `json:"historial"`
 }
 
-type SmartContract struct {
-	contractapi.Contract
-}
+type SmartContract struct{ contractapi.Contract }
 
-// validarOrg: Validación de identidades institucionales (Sección 5 y RNF-5/6)
 func (s *SmartContract) validarOrg(ctx contractapi.TransactionContextInterface, mspIDEsperado string) error {
 	clientMSPID, err := cid.GetMSPID(ctx.GetStub())
 	if err != nil {
 		return fmt.Errorf("error al obtener identidad: %v", err)
 	}
 	if clientMSPID != mspIDEsperado {
-		return fmt.Errorf("organización no autorizada: la función requiere %s", mspIDEsperado)
+		return fmt.Errorf("organización no autorizada: requiere %s", mspIDEsperado)
 	}
 	return nil
 }
 
-// RF-1: Registrar expediente inicial
 func (s *SmartContract) RegistrarExpediente(ctx contractapi.TransactionContextInterface, matricula string, hashDocInicial string) error {
-	if err := s.validarOrg(ctx, "RegistroMSP"); err != nil {
+	if err := s.validarOrg(ctx, "Org1MSP"); err != nil {
 		return err
 	}
-
-	exists, _ := s.ExpedienteExiste(ctx, matricula)
-	if exists {
-		return fmt.Errorf("el expediente con matrícula %s ya existe", matricula)
+	existe, _ := s.ExpedienteExiste(ctx, matricula)
+	if existe {
+		return fmt.Errorf("el expediente %s ya existe", matricula)
 	}
-
-	expediente := Expediente{
-		DocType:      "expediente",
-		Matricula:    matricula,
-		EstadoActual: EstadoInscrito,
-		Historial:    []EventoHistorial{},
-	}
-
-	return s.persistirTransicion(ctx, &expediente, EstadoInscrito, "RegistroMSP", hashDocInicial, "RegistrarExpediente")
+	expediente := Expediente{DocType: "expediente", Matricula: matricula, EstadoActual: EstadoInscrito, Historial: []EventoHistorial{}}
+	return s.persistirTransicion(ctx, &expediente, EstadoInscrito, "Registro Escolar (Org1)", hashDocInicial, "RegistrarExpediente")
 }
 
-// RF-2: Validar documentos iniciales
-func (s *SmartContract) ValidarDocumentos(ctx contractapi.TransactionContextInterface, matricula string, hashValidacion string) error {
-	if err := s.validarOrg(ctx, "RegistroMSP"); err != nil {
+func (s *SmartContract) ValidarDocumentos(ctx contractapi.TransactionContextInterface, matricula string, hashCotejo string) error {
+	if err := s.validarOrg(ctx, "Org1MSP"); err != nil {
 		return err
 	}
-
-	expediente, err := s.ConsultarExpediente(ctx, matricula)
+	exp, err := s.ConsultarExpediente(ctx, matricula)
 	if err != nil {
 		return err
 	}
-
-	if expediente.EstadoActual != EstadoInscrito {
-		return fmt.Errorf("transición inválida: se esperaba %s", EstadoInscrito)
+	if exp.EstadoActual != EstadoInscrito {
+		return fmt.Errorf("transición inválida")
 	}
-
-	return s.persistirTransicion(ctx, expediente, EstadoDocValidado, "RegistroMSP", hashValidacion, "ValidarDocumentos")
+	return s.persistirTransicion(ctx, exp, EstadoDocValidado, "Registro Escolar (Org1)", hashCotejo, "ValidarDocumentos")
 }
 
-// RF-3: Iniciar Servicio Social
 func (s *SmartContract) IniciarServicioSocial(ctx contractapi.TransactionContextInterface, matricula string, hashAutorizacion string) error {
-	if err := s.validarOrg(ctx, "ServicioSocialMSP"); err != nil {
+	if err := s.validarOrg(ctx, "Org2MSP"); err != nil {
 		return err
 	}
-
-	expediente, err := s.ConsultarExpediente(ctx, matricula)
+	exp, err := s.ConsultarExpediente(ctx, matricula)
 	if err != nil {
 		return err
 	}
-
-	if expediente.EstadoActual != EstadoDocValidado {
-		return fmt.Errorf("transición inválida: se esperaba %s", EstadoDocValidado)
+	if exp.EstadoActual != EstadoDocValidado {
+		return fmt.Errorf("transición inválida")
 	}
-
-	return s.persistirTransicion(ctx, expediente, EstadoSSEnCurso, "ServicioSocialMSP", hashAutorizacion, "IniciarServicioSocial")
+	return s.persistirTransicion(ctx, exp, EstadoSSEnCurso, "Servicio Social (Org2)", hashAutorizacion, "IniciarServicioSocial")
 }
 
-// RF-4: Liberar Servicio Social
-func (s *SmartContract) LiberarServicioSocial(ctx contractapi.TransactionContextInterface, matricula string, hashLiberacion string) error {
-	if err := s.validarOrg(ctx, "ServicioSocialMSP"); err != nil {
+func (s *SmartContract) LiberarServicioSocial(ctx contractapi.TransactionContextInterface, matricula string, hashCarta string) error {
+	if err := s.validarOrg(ctx, "Org2MSP"); err != nil {
 		return err
 	}
-
-	expediente, err := s.ConsultarExpediente(ctx, matricula)
+	exp, err := s.ConsultarExpediente(ctx, matricula)
 	if err != nil {
 		return err
 	}
-
-	if expediente.EstadoActual != EstadoSSEnCurso {
-		return fmt.Errorf("transición inválida: se esperaba %s", EstadoSSEnCurso)
+	if exp.EstadoActual != EstadoSSEnCurso {
+		return fmt.Errorf("transición inválida")
 	}
-
-	return s.persistirTransicion(ctx, expediente, EstadoSSLiberado, "ServicioSocialMSP", hashLiberacion, "LiberarServicioSocial")
+	return s.persistirTransicion(ctx, exp, EstadoSSLiberado, "Servicio Social (Org2)", hashCarta, "LiberarServicioSocial")
 }
 
-// RF-5: Emitir Certificación de Créditos
-func (s *SmartContract) EmitirCertificacion(ctx contractapi.TransactionContextInterface, matricula string, hashCertificacion string) error {
-	if err := s.validarOrg(ctx, "CertificacionMSP"); err != nil {
+func (s *SmartContract) EmitirCertificacion(ctx contractapi.TransactionContextInterface, matricula string, hashCert string) error {
+	if err := s.validarOrg(ctx, "Org1MSP"); err != nil {
 		return err
 	}
-
-	expediente, err := s.ConsultarExpediente(ctx, matricula)
+	exp, err := s.ConsultarExpediente(ctx, matricula)
 	if err != nil {
 		return err
 	}
-
-	if expediente.EstadoActual != EstadoSSLiberado {
-		return fmt.Errorf("transición inválida: se esperaba %s", EstadoSSLiberado)
+	if exp.EstadoActual != EstadoSSLiberado {
+		return fmt.Errorf("transición inválida")
 	}
-
-	return s.persistirTransicion(ctx, expediente, EstadoCertificado, "CertificacionMSP", hashCertificacion, "EmitirCertificacion")
+	return s.persistirTransicion(ctx, exp, EstadoCertificado, "Certificaciones (Org1)", hashCert, "EmitirCertificacion")
 }
 
-// RF-6: Emitir Título Profesional
 func (s *SmartContract) EmitirTitulo(ctx contractapi.TransactionContextInterface, matricula string, hashTitulo string) error {
-	if err := s.validarOrg(ctx, "TitulacionMSP"); err != nil {
+	if err := s.validarOrg(ctx, "Org2MSP"); err != nil {
 		return err
 	}
-
-	expediente, err := s.ConsultarExpediente(ctx, matricula)
+	exp, err := s.ConsultarExpediente(ctx, matricula)
 	if err != nil {
 		return err
 	}
-
-	if expediente.EstadoActual != EstadoCertificado {
-		return fmt.Errorf("transición inválida: se esperaba %s", EstadoCertificado)
+	if exp.EstadoActual != EstadoCertificado {
+		return fmt.Errorf("transición inválida")
 	}
-
-	// Validación interna de integridad (Requisito crítico RF-6)
-	if err := s.verificarIntegridadHitosPrevios(expediente); err != nil {
-		return fmt.Errorf("FALLO DE INTEGRIDAD CRIPTOGRÁFICA: %v", err)
+	if err := s.verificarIntegridad(exp); err != nil {
+		return err
 	}
-
-	return s.persistirTransicion(ctx, expediente, EstadoTitulado, "TitulacionMSP", hashTitulo, "EmitirTitulo")
+	return s.persistirTransicion(ctx, exp, EstadoTitulado, "Titulaciones (Org2)", hashTitulo, "EmitirTitulo")
 }
 
-// RF-7 y RF-8: Consultar expediente e historial
-func (s *SmartContract) ConsultarExpediente(ctx contractapi.TransactionContextInterface, matricula string) (*Expediente, error) {
-	expedienteJSON, err := ctx.GetStub().GetState(matricula)
-	if err != nil {
-		return nil, fmt.Errorf("error al leer world state: %v", err)
-	}
-	if expedienteJSON == nil {
-		return nil, fmt.Errorf("el expediente %s no existe", matricula)
-	}
-
-	var expediente Expediente
-	err = json.Unmarshal(expedienteJSON, &expediente)
-	return &expediente, err
-}
-
-// RF-9: Listar expedientes por estado (Rich Query CouchDB)
+// NUEVA: RF-9 - Búsqueda por Atributo (Rich Query)
 func (s *SmartContract) ExpedientesPorEstado(ctx contractapi.TransactionContextInterface, estado string) ([]*Expediente, error) {
 	queryString := fmt.Sprintf(`{"selector":{"docType":"expediente","estadoActual":"%s"}}`, estado)
 	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
@@ -194,45 +142,44 @@ func (s *SmartContract) ExpedientesPorEstado(ctx contractapi.TransactionContextI
 
 	var expedientes []*Expediente
 	for resultsIterator.HasNext() {
-		response, _ := resultsIterator.Next()
+		res, _ := resultsIterator.Next()
 		var exp Expediente
-		json.Unmarshal(response.Value, &exp)
+		json.Unmarshal(res.Value, &exp)
 		expedientes = append(expedientes, &exp)
 	}
 	return expedientes, nil
 }
 
-// --- Funciones de Soporte Internas ---
-
-func (s *SmartContract) persistirTransicion(ctx contractapi.TransactionContextInterface, exp *Expediente, nuevoEstado, org, hash, accion string) error {
-	evento := EventoHistorial{
-		Estado:        nuevoEstado,
-		Org:           org,
-		Accion:        accion,
-		Timestamp:     time.Now().Format(time.RFC3339),
-		HashEvidencia: hash,
+func (s *SmartContract) ConsultarExpediente(ctx contractapi.TransactionContextInterface, matricula string) (*Expediente, error) {
+	expJSON, _ := ctx.GetStub().GetState(matricula)
+	if expJSON == nil {
+		return nil, fmt.Errorf("el expediente %s no existe", matricula)
 	}
+	var exp Expediente
+	json.Unmarshal(expJSON, &exp)
+	return &exp, nil
+}
 
-	exp.EstadoActual = nuevoEstado
+func (s *SmartContract) persistirTransicion(ctx contractapi.TransactionContextInterface, exp *Expediente, estado, org, hash, accion string) error {
+	evento := EventoHistorial{Estado: estado, Org: org, Timestamp: time.Now().UTC().Format(time.RFC3339), HashEvidencia: hash, Accion: accion}
+	exp.EstadoActual = estado
 	exp.Historial = append(exp.Historial, evento)
-
 	expJSON, _ := json.Marshal(exp)
 	return ctx.GetStub().PutState(exp.Matricula, expJSON)
 }
 
-func (s *SmartContract) verificarIntegridadHitosPrevios(expediente *Expediente) error {
-	hitosRequeridos := []string{EstadoInscrito, EstadoDocValidado, EstadoSSEnCurso, EstadoSSLiberado, EstadoCertificado}
-
-	for _, hito := range hitosRequeridos {
-		encontrado := false
-		for _, evento := range expediente.Historial {
-			if evento.Estado == hito && evento.HashEvidencia != "" {
-				encontrado = true
+func (s *SmartContract) verificarIntegridad(exp *Expediente) error {
+	hitos := []string{EstadoInscrito, EstadoDocValidado, EstadoSSEnCurso, EstadoSSLiberado, EstadoCertificado}
+	for _, h := range hitos {
+		found := false
+		for _, e := range exp.Historial {
+			if e.Estado == h {
+				found = true
 				break
 			}
 		}
-		if !encontrado {
-			return fmt.Errorf("falta evidencia obligatoria del hito: %s", hito)
+		if !found {
+			return fmt.Errorf("falta hito: %s", h)
 		}
 	}
 	return nil
@@ -240,8 +187,5 @@ func (s *SmartContract) verificarIntegridadHitosPrevios(expediente *Expediente) 
 
 func (s *SmartContract) ExpedienteExiste(ctx contractapi.TransactionContextInterface, matricula string) (bool, error) {
 	expedienteJSON, err := ctx.GetStub().GetState(matricula)
-	if err != nil {
-		return false, err
-	}
-	return expedienteJSON != nil, nil
+	return err == nil && expedienteJSON != nil, nil
 }
