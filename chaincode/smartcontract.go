@@ -9,103 +9,73 @@ import (
 	"github.com/hyperledger/fabric-contract-api-go/contractapi"
 )
 
+// Estados válidos según Sección 4.3 del SRS
 const (
-	EstadoInscrito      = "INSCRITO"
-	EstadoDocsValidados = "DOC_VALIDADO"
-	EstadoSSEnCurso     = "SS_EN_CURSO"
-	EstadoSSLiberado    = "SS_LIBERADO"
-	EstadoCertificado   = "CERTIFICADO"
-	EstadoTitulado      = "TITULADO"
+	EstadoInscrito    = "INSCRITO"
+	EstadoDocValidado = "DOC_VALIDADO"
+	EstadoSSEnCurso   = "SS_EN_CURSO"
+	EstadoSSLiberado  = "SS_LIBERADO"
+	EstadoCertificado = "CERTIFICADO"
+	EstadoTitulado    = "TITULADO"
 )
 
-type HashEvidencia struct {
-	Hash      string `json:"hash"`
-	Timestamp string `json:"timestamp"`
-	Emisor    string `json:"emisor"`
+// EventoHistorial: Estructura para auditoría (Sección 4.2)
+type EventoHistorial struct {
+	Estado        string `json:"estado"`
+	Org           string `json:"org"`
+	Timestamp     string `json:"timestamp"`
+	HashEvidencia string `json:"hashEvidencia"`
+	Accion        string `json:"accion"`
 }
 
+// Expediente: Estructura principal sin PII (RNF-8 y Sección 4.1)
 type Expediente struct {
-	DocType      string                   `json:"docType"`
-	ID           string                   `json:"id"`
-	Nombre       string                   `json:"nombre"`
-	EstadoActual string                   `json:"estadoActual"`
-	Evidencias   map[string]HashEvidencia `json:"evidencias"`
+	DocType      string            `json:"docType"`
+	Matricula    string            `json:"matricula"`
+	EstadoActual string            `json:"estadoActual"`
+	Historial    []EventoHistorial `json:"historial"` // Slice ordenado para trazabilidad secuencial
 }
 
 type SmartContract struct {
 	contractapi.Contract
 }
 
+// validarOrg: Validación de identidades institucionales (Sección 5 y RNF-5/6)
 func (s *SmartContract) validarOrg(ctx contractapi.TransactionContextInterface, mspIDEsperado string) error {
 	clientMSPID, err := cid.GetMSPID(ctx.GetStub())
 	if err != nil {
-		return fmt.Errorf("error al obtener MSPID: %v", err)
+		return fmt.Errorf("error al obtener identidad: %v", err)
 	}
 	if clientMSPID != mspIDEsperado {
-		return fmt.Errorf("autorización denegada: la organización %s no tiene permiso para esta acción", clientMSPID)
+		return fmt.Errorf("organización no autorizada: la función requiere %s", mspIDEsperado)
 	}
 	return nil
 }
 
-func (s *SmartContract) RegistrarIngreso(ctx contractapi.TransactionContextInterface, id string, nombre string) error {
-	if err := s.validarOrg(ctx, "Org1MSP"); err != nil {
+// RF-1: Registrar expediente inicial
+func (s *SmartContract) RegistrarExpediente(ctx contractapi.TransactionContextInterface, matricula string, hashDocInicial string) error {
+	if err := s.validarOrg(ctx, "RegistroMSP"); err != nil {
 		return err
 	}
 
-	existe, err := s.ExpedienteExiste(ctx, id)
-	if err != nil {
-		return err
-	}
-	if existe {
-		return fmt.Errorf("el expediente del alumno %s ya existe", id)
+	exists, _ := s.ExpedienteExiste(ctx, matricula)
+	if exists {
+		return fmt.Errorf("el expediente con matrícula %s ya existe", matricula)
 	}
 
 	expediente := Expediente{
 		DocType:      "expediente",
-		ID:           id,
-		Nombre:       nombre,
+		Matricula:    matricula,
 		EstadoActual: EstadoInscrito,
-		Evidencias:   make(map[string]HashEvidencia),
+		Historial:    []EventoHistorial{},
 	}
 
-	// 🔥 LA CORRECCIÓN: Registrar la evidencia del hito inicial
-	expediente.Evidencias[EstadoInscrito] = HashEvidencia{
-		Hash:      "HASH_INICIAL_REGISTRO_SISTEMA", // Aquí iría el hash del acta de nacimiento o CURP
-		Timestamp: time.Now().Format(time.RFC3339),
-		Emisor:    "Registro Escolar - Org1",
-	}
-
-	expedienteJSON, _ := json.Marshal(expediente)
-	return ctx.GetStub().PutState(id, expedienteJSON)
+	return s.persistirTransicion(ctx, &expediente, EstadoInscrito, "RegistroMSP", hashDocInicial, "RegistrarExpediente")
 }
 
-func (s *SmartContract) ValidarDocumentacion(ctx contractapi.TransactionContextInterface, id string, hashDocumentos string) error {
-	if err := s.validarOrg(ctx, "Org1MSP"); err != nil {
-		return err
-	}
-
-	expediente, err := s.ConsultarExpediente(ctx, id)
-	if err != nil {
-		return err
-	}
-
-	if expediente.EstadoActual != EstadoInscrito {
-		return fmt.Errorf("transición inválida: requiere %s, actual es %s", EstadoInscrito, expediente.EstadoActual)
-	}
-
-	expediente.EstadoActual = EstadoDocsValidados
-	expediente.Evidencias[EstadoDocsValidados] = HashEvidencia{
-		Hash:      hashDocumentos,
-		Timestamp: time.Now().Format(time.RFC3339),
-		Emisor:    "Registro Escolar - Org1",
-	}
-
-	expedienteJSON, _ := json.Marshal(expediente)
-	return ctx.GetStub().PutState(id, expedienteJSON)
-}
-
-func (s *SmartContract) IniciarServicioSocial(ctx contractapi.TransactionContextInterface, matricula string, hashAutorizacion string) error {
-	if err := s.validarOrg(ctx, "Org2MSP"); err != nil {
+// RF-2: Validar documentos iniciales
+func (s *SmartContract) ValidarDocumentos(ctx contractapi.TransactionContextInterface, matricula string, hashValidacion string) error {
+	if err := s.validarOrg(ctx, "RegistroMSP"); err != nil {
 		return err
 	}
 
@@ -114,48 +84,52 @@ func (s *SmartContract) IniciarServicioSocial(ctx contractapi.TransactionContext
 		return err
 	}
 
-	if expediente.EstadoActual != EstadoDocsValidados {
-		return fmt.Errorf("transición inválida: requiere %s, actual es %s", EstadoDocsValidados, expediente.EstadoActual)
+	if expediente.EstadoActual != EstadoInscrito {
+		return fmt.Errorf("transición inválida: se esperaba %s", EstadoInscrito)
 	}
 
-	expediente.EstadoActual = EstadoSSEnCurso
-	expediente.Evidencias[EstadoSSEnCurso] = HashEvidencia{
-		Hash:      hashAutorizacion,
-		Timestamp: time.Now().Format(time.RFC3339),
-		Emisor:    "Servicio Social - Org2",
-	}
-
-	expedienteJSON, _ := json.Marshal(expediente)
-	return ctx.GetStub().PutState(matricula, expedienteJSON)
+	return s.persistirTransicion(ctx, expediente, EstadoDocValidado, "RegistroMSP", hashValidacion, "ValidarDocumentos")
 }
 
-func (s *SmartContract) LiberarServicioSocial(ctx contractapi.TransactionContextInterface, id string, hashLiberacion string) error {
-	if err := s.validarOrg(ctx, "Org2MSP"); err != nil {
+// RF-3: Iniciar Servicio Social
+func (s *SmartContract) IniciarServicioSocial(ctx contractapi.TransactionContextInterface, matricula string, hashAutorizacion string) error {
+	if err := s.validarOrg(ctx, "ServicioSocialMSP"); err != nil {
 		return err
 	}
 
-	expediente, err := s.ConsultarExpediente(ctx, id)
+	expediente, err := s.ConsultarExpediente(ctx, matricula)
+	if err != nil {
+		return err
+	}
+
+	if expediente.EstadoActual != EstadoDocValidado {
+		return fmt.Errorf("transición inválida: se esperaba %s", EstadoDocValidado)
+	}
+
+	return s.persistirTransicion(ctx, expediente, EstadoSSEnCurso, "ServicioSocialMSP", hashAutorizacion, "IniciarServicioSocial")
+}
+
+// RF-4: Liberar Servicio Social
+func (s *SmartContract) LiberarServicioSocial(ctx contractapi.TransactionContextInterface, matricula string, hashLiberacion string) error {
+	if err := s.validarOrg(ctx, "ServicioSocialMSP"); err != nil {
+		return err
+	}
+
+	expediente, err := s.ConsultarExpediente(ctx, matricula)
 	if err != nil {
 		return err
 	}
 
 	if expediente.EstadoActual != EstadoSSEnCurso {
-		return fmt.Errorf("transición inválida: requiere %s, actual es %s", EstadoSSEnCurso, expediente.EstadoActual)
+		return fmt.Errorf("transición inválida: se esperaba %s", EstadoSSEnCurso)
 	}
 
-	expediente.EstadoActual = EstadoSSLiberado
-	expediente.Evidencias[EstadoSSLiberado] = HashEvidencia{
-		Hash:      hashLiberacion,
-		Timestamp: time.Now().Format(time.RFC3339),
-		Emisor:    "Servicio Social - Org2",
-	}
-
-	expedienteJSON, _ := json.Marshal(expediente)
-	return ctx.GetStub().PutState(id, expedienteJSON)
+	return s.persistirTransicion(ctx, expediente, EstadoSSLiberado, "ServicioSocialMSP", hashLiberacion, "LiberarServicioSocial")
 }
 
-func (s *SmartContract) CertificarEstudio(ctx contractapi.TransactionContextInterface, matricula string, hashCertificado string) error {
-	if err := s.validarOrg(ctx, "Org1MSP"); err != nil {
+// RF-5: Emitir Certificación de Créditos
+func (s *SmartContract) EmitirCertificacion(ctx contractapi.TransactionContextInterface, matricula string, hashCertificacion string) error {
+	if err := s.validarOrg(ctx, "CertificacionMSP"); err != nil {
 		return err
 	}
 
@@ -165,22 +139,15 @@ func (s *SmartContract) CertificarEstudio(ctx contractapi.TransactionContextInte
 	}
 
 	if expediente.EstadoActual != EstadoSSLiberado {
-		return fmt.Errorf("error de flujo: requiere %s antes de certificar", EstadoSSLiberado)
+		return fmt.Errorf("transición inválida: se esperaba %s", EstadoSSLiberado)
 	}
 
-	expediente.EstadoActual = EstadoCertificado
-	expediente.Evidencias[EstadoCertificado] = HashEvidencia{
-		Hash:      hashCertificado,
-		Timestamp: time.Now().Format(time.RFC3339),
-		Emisor:    "Certificaciones - Org1",
-	}
-
-	expedienteJSON, _ := json.Marshal(expediente)
-	return ctx.GetStub().PutState(matricula, expedienteJSON)
+	return s.persistirTransicion(ctx, expediente, EstadoCertificado, "CertificacionMSP", hashCertificacion, "EmitirCertificacion")
 }
 
-func (s *SmartContract) TitularAlumno(ctx contractapi.TransactionContextInterface, matricula string, hashActa string) error {
-	if err := s.validarOrg(ctx, "Org2MSP"); err != nil {
+// RF-6: Emitir Título Profesional
+func (s *SmartContract) EmitirTitulo(ctx contractapi.TransactionContextInterface, matricula string, hashTitulo string) error {
+	if err := s.validarOrg(ctx, "TitulacionMSP"); err != nil {
 		return err
 	}
 
@@ -190,31 +157,25 @@ func (s *SmartContract) TitularAlumno(ctx contractapi.TransactionContextInterfac
 	}
 
 	if expediente.EstadoActual != EstadoCertificado {
-		return fmt.Errorf("error de flujo: requiere %s, actual es %s", EstadoCertificado, expediente.EstadoActual)
+		return fmt.Errorf("transición inválida: se esperaba %s", EstadoCertificado)
 	}
 
+	// Validación interna de integridad (Requisito crítico RF-6)
 	if err := s.verificarIntegridadHitosPrevios(expediente); err != nil {
-		return fmt.Errorf("FALLO DE SEGURIDAD: %v", err)
+		return fmt.Errorf("FALLO DE INTEGRIDAD CRIPTOGRÁFICA: %v", err)
 	}
 
-	expediente.EstadoActual = EstadoTitulado
-	expediente.Evidencias[EstadoTitulado] = HashEvidencia{
-		Hash:      hashActa,
-		Timestamp: time.Now().Format(time.RFC3339),
-		Emisor:    "Titulaciones - Org2",
-	}
-
-	expedienteJSON, _ := json.Marshal(expediente)
-	return ctx.GetStub().PutState(matricula, expedienteJSON)
+	return s.persistirTransicion(ctx, expediente, EstadoTitulado, "TitulacionMSP", hashTitulo, "EmitirTitulo")
 }
 
-func (s *SmartContract) ConsultarExpediente(ctx contractapi.TransactionContextInterface, id string) (*Expediente, error) {
-	expedienteJSON, err := ctx.GetStub().GetState(id)
+// RF-7 y RF-8: Consultar expediente e historial
+func (s *SmartContract) ConsultarExpediente(ctx contractapi.TransactionContextInterface, matricula string) (*Expediente, error) {
+	expedienteJSON, err := ctx.GetStub().GetState(matricula)
 	if err != nil {
-		return nil, fmt.Errorf("fallo al leer: %v", err)
+		return nil, fmt.Errorf("error al leer world state: %v", err)
 	}
 	if expedienteJSON == nil {
-		return nil, fmt.Errorf("el expediente %s no existe", id)
+		return nil, fmt.Errorf("el expediente %s no existe", matricula)
 	}
 
 	var expediente Expediente
@@ -222,16 +183,10 @@ func (s *SmartContract) ConsultarExpediente(ctx contractapi.TransactionContextIn
 	return &expediente, err
 }
 
-func (s *SmartContract) ExpedienteExiste(ctx contractapi.TransactionContextInterface, id string) (bool, error) {
-	expedienteJSON, err := ctx.GetStub().GetState(id)
-	if err != nil {
-		return false, fmt.Errorf("error al leer world state: %v", err)
-	}
-	return expedienteJSON != nil, nil
-}
-
-func (s *SmartContract) QueryExpedientes(ctx contractapi.TransactionContextInterface, query string) ([]*Expediente, error) {
-	resultsIterator, err := ctx.GetStub().GetQueryResult(query)
+// RF-9: Listar expedientes por estado (Rich Query CouchDB)
+func (s *SmartContract) ExpedientesPorEstado(ctx contractapi.TransactionContextInterface, estado string) ([]*Expediente, error) {
+	queryString := fmt.Sprintf(`{"selector":{"docType":"expediente","estadoActual":"%s"}}`, estado)
+	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
 	if err != nil {
 		return nil, err
 	}
@@ -239,24 +194,54 @@ func (s *SmartContract) QueryExpedientes(ctx contractapi.TransactionContextInter
 
 	var expedientes []*Expediente
 	for resultsIterator.HasNext() {
-		queryResponse, err := resultsIterator.Next()
-		if err != nil {
-			return nil, err
-		}
-		var expediente Expediente
-		_ = json.Unmarshal(queryResponse.Value, &expediente)
-		expedientes = append(expedientes, &expediente)
+		response, _ := resultsIterator.Next()
+		var exp Expediente
+		json.Unmarshal(response.Value, &exp)
+		expedientes = append(expedientes, &exp)
 	}
 	return expedientes, nil
 }
 
+// --- Funciones de Soporte Internas ---
+
+func (s *SmartContract) persistirTransicion(ctx contractapi.TransactionContextInterface, exp *Expediente, nuevoEstado, org, hash, accion string) error {
+	evento := EventoHistorial{
+		Estado:        nuevoEstado,
+		Org:           org,
+		Accion:        accion,
+		Timestamp:     time.Now().Format(time.RFC3339),
+		HashEvidencia: hash,
+	}
+
+	exp.EstadoActual = nuevoEstado
+	exp.Historial = append(exp.Historial, evento)
+
+	expJSON, _ := json.Marshal(exp)
+	return ctx.GetStub().PutState(exp.Matricula, expJSON)
+}
+
 func (s *SmartContract) verificarIntegridadHitosPrevios(expediente *Expediente) error {
-	hitos := []string{EstadoInscrito, EstadoDocsValidados, EstadoSSEnCurso, EstadoSSLiberado, EstadoCertificado}
-	for _, hito := range hitos {
-		evidencia, existe := expediente.Evidencias[hito]
-		if !existe || evidencia.Hash == "" {
-			return fmt.Errorf("falta hito obligatorio: %s", hito)
+	hitosRequeridos := []string{EstadoInscrito, EstadoDocValidado, EstadoSSEnCurso, EstadoSSLiberado, EstadoCertificado}
+
+	for _, hito := range hitosRequeridos {
+		encontrado := false
+		for _, evento := range expediente.Historial {
+			if evento.Estado == hito && evento.HashEvidencia != "" {
+				encontrado = true
+				break
+			}
+		}
+		if !encontrado {
+			return fmt.Errorf("falta evidencia obligatoria del hito: %s", hito)
 		}
 	}
 	return nil
+}
+
+func (s *SmartContract) ExpedienteExiste(ctx contractapi.TransactionContextInterface, matricula string) (bool, error) {
+	expedienteJSON, err := ctx.GetStub().GetState(matricula)
+	if err != nil {
+		return false, err
+	}
+	return expedienteJSON != nil, nil
 }
